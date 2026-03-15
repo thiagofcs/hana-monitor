@@ -1,0 +1,22 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model HanaInstance {
+  id        String   @id @default(uuid())
+  name      String
+  host      String
+  port      Int      @default(30015)
+  username  String
+  password  String
+  useSsl    Boolean  @default(false)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("hana_instances")
+}
