@@ -18,5 +18,60 @@ model HanaInstance {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  schedules Schedule[]
+  snapshots MetricSnapshot[]
+
   @@map("hana_instances")
+}
+
+model Metric {
+  id              String   @id @default(uuid())
+  name            String
+  query           String
+  unit            String   @default("")
+  refreshInterval Int      @default(5) @map("refresh_interval")
+  color           String   @default("blue")
+  defaultW        Int      @default(4) @map("default_w")
+  defaultH        Int      @default(3) @map("default_h")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  schedules Schedule[]
+  snapshots MetricSnapshot[]
+
+  @@map("metrics")
+}
+
+model Schedule {
+  id              String           @id @default(uuid())
+  metricId        String           @map("metric_id")
+  instanceId      String           @map("instance_id")
+  intervalSeconds Int              @default(60) @map("interval_seconds")
+  enabled         Boolean          @default(true)
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+
+  metric   Metric       @relation(fields: [metricId], references: [id], onDelete: Cascade)
+  instance HanaInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  snapshots MetricSnapshot[]
+
+  @@map("schedules")
+}
+
+model MetricSnapshot {
+  id         String   @id @default(uuid())
+  scheduleId String   @map("schedule_id")
+  metricId   String   @map("metric_id")
+  instanceId String   @map("instance_id")
+  value      Json
+  timestamp  DateTime @default(now())
+
+  schedule Schedule     @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  metric   Metric       @relation(fields: [metricId], references: [id], onDelete: Cascade)
+  instance HanaInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  @@index([scheduleId, timestamp])
+  @@index([metricId, timestamp])
+  @@index([instanceId, timestamp])
+  @@map("metric_snapshots")
 }

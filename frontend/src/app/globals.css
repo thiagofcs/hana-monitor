@@ -24,3 +24,19 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* react-grid-layout resize handle */
+.react-resizable-handle {
+  background: none !important;
+}
+
+.react-resizable-handle::after {
+  border-right-color: #4b5563 !important;
+  border-bottom-color: #4b5563 !important;
+}
+
+.react-grid-item.react-grid-placeholder {
+  background: #3b82f6 !important;
+  opacity: 0.15 !important;
+  border-radius: 0.75rem;
+}

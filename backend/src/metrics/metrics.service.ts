@@ -3,73 +3,84 @@ import * as hdb from 'hdb';
 import { Observable, Subject } from 'rxjs';
 import { PrismaService } from '../prisma/prisma.service';
 
-const MEMORY_QUERY = `
-SELECT
-    "Memory Usage"
-FROM (
-  SELECT
-      ROUND(INSTANCE_TOTAL_MEMORY_USED_SIZE/1024/1024/1024, 2) AS "Memory Usage"
-  FROM M_HOST_RESOURCE_UTILIZATION
-)
-`;
-
-export interface MemoryMetrics {
-  memoryUsageGb: number;
+export interface MetricResult {
+  metricId: string;
+  value: number | null;
   timestamp: string;
   error?: string;
 }
 
-interface InstancePoller {
-  subject: Subject<MemoryMetrics>;
-  client: hdb.Client | null;
-  timer: ReturnType<typeof setInterval> | null;
+/**
+ * One HANA connection per instance, shared across all metrics and SSE clients.
+ * Each metric runs its own polling interval on the shared connection.
+ */
+interface MetricPoller {
+  timer: ReturnType<typeof setInterval>;
+  subscribers: number;
+}
+
+interface InstanceConnection {
+  client: hdb.Client;
+  subject: Subject<MetricResult>;
+  metricPollers: Map<string, MetricPoller>;
   subscribers: number;
 }
 
 @Injectable()
 export class MetricsService implements OnModuleDestroy {
-  private pollers = new Map<string, InstancePoller>();
+  private connections = new Map<string, InstanceConnection>();
 
   constructor(private readonly prisma: PrismaService) {}
 
   onModuleDestroy() {
-    for (const [id] of this.pollers) {
-      this.stopPoller(id);
+    for (const [id] of this.connections) {
+      this.teardownConnection(id);
     }
   }
 
-  streamMemory(instanceId: string, intervalMs = 5000): Observable<MessageEvent> {
+  /**
+   * Stream all metric results for a given instance.
+   * Each SSE client subscribes to the shared subject.
+   */
+  streamMetrics(instanceId: string): Observable<MessageEvent> {
     return new Observable((subscriber) => {
-      let started = false;
+      let connected = false;
 
-      this.startPoller(instanceId, intervalMs)
-        .then((poller) => {
-          started = true;
-          const sub = poller.subject.subscribe((metrics) => {
-            subscriber.next({ data: metrics } as MessageEvent);
+      this.ensureConnection(instanceId)
+        .then((conn) => {
+          connected = true;
+          const sub = conn.subject.subscribe((result) => {
+            subscriber.next({ data: result } as MessageEvent);
           });
 
-          // When this SSE client disconnects, unsubscribe and maybe stop the poller
           subscriber.add(() => {
             sub.unsubscribe();
-            this.removeSubscriber(instanceId);
+            this.removeConnectionSubscriber(instanceId);
           });
+
+          // Start polling all defined metrics
+          return this.syncMetricPollers(instanceId);
         })
         .catch((err: Error) => {
-          subscriber.next({ data: { error: err.message } } as MessageEvent);
+          subscriber.next({
+            data: { metricId: '', value: null, timestamp: new Date().toISOString(), error: err.message },
+          } as MessageEvent);
           subscriber.complete();
         });
 
       return () => {
-        if (started) {
-          this.removeSubscriber(instanceId);
+        if (connected) {
+          this.removeConnectionSubscriber(instanceId);
         }
       };
     });
   }
 
-  private async startPoller(instanceId: string, intervalMs: number): Promise<InstancePoller> {
-    const existing = this.pollers.get(instanceId);
+  /**
+   * Ensure a HANA connection exists for the instance. Reuse if already open.
+   */
+  private async ensureConnection(instanceId: string): Promise<InstanceConnection> {
+    const existing = this.connections.get(instanceId);
     if (existing) {
       existing.subscribers++;
       return existing;
@@ -80,14 +91,6 @@ export class MetricsService implements OnModuleDestroy {
     });
     if (!instance) throw new NotFoundException('Instance not found');
 
-    const poller: InstancePoller = {
-      subject: new Subject<MemoryMetrics>(),
-      client: null,
-      timer: null,
-      subscribers: 1,
-    };
-    this.pollers.set(instanceId, poller);
-
     const client = hdb.createClient({
       host: instance.host,
       port: instance.port,
@@ -95,61 +98,105 @@ export class MetricsService implements OnModuleDestroy {
       password: instance.password,
       useTLS: instance.useSsl,
     });
-    poller.client = client;
 
     return new Promise((resolve, reject) => {
       client.connect((err: Error | null) => {
         if (err) {
-          this.pollers.delete(instanceId);
           reject(err);
           return;
         }
 
-        const poll = () => {
-          client.exec(MEMORY_QUERY, (execErr, rows) => {
-            if (execErr) {
-              poller.subject.next({
-                memoryUsageGb: 0,
-                timestamp: new Date().toISOString(),
-                error: execErr.message,
-              });
-              return;
-            }
-
-            const row = rows?.[0];
-            poller.subject.next({
-              memoryUsageGb: row ? Number(row['Memory Usage']) : 0,
-              timestamp: new Date().toISOString(),
-            });
-          });
+        const conn: InstanceConnection = {
+          client,
+          subject: new Subject<MetricResult>(),
+          metricPollers: new Map(),
+          subscribers: 1,
         };
-
-        poll();
-        poller.timer = setInterval(poll, intervalMs);
-        resolve(poller);
+        this.connections.set(instanceId, conn);
+        resolve(conn);
       });
     });
   }
 
-  private removeSubscriber(instanceId: string) {
-    const poller = this.pollers.get(instanceId);
-    if (!poller) return;
+  /**
+   * Load all metric definitions and start a poller for each one
+   * that doesn't already have one running.
+   */
+  private async syncMetricPollers(instanceId: string) {
+    const conn = this.connections.get(instanceId);
+    if (!conn) return;
 
-    poller.subscribers--;
-    if (poller.subscribers <= 0) {
-      this.stopPoller(instanceId);
+    const metrics = await this.prisma.metric.findMany();
+
+    for (const metric of metrics) {
+      if (conn.metricPollers.has(metric.id)) {
+        const poller = conn.metricPollers.get(metric.id)!;
+        poller.subscribers++;
+        continue;
+      }
+
+      const intervalMs = metric.refreshInterval * 1000;
+
+      const poll = () => {
+        conn.client.exec(metric.query, (execErr, rows) => {
+          if (execErr) {
+            conn.subject.next({
+              metricId: metric.id,
+              value: null,
+              timestamp: new Date().toISOString(),
+              error: execErr.message,
+            });
+            return;
+          }
+
+          const row = rows?.[0];
+          // Get the first column value from the result
+          const firstKey = row ? Object.keys(row)[0] : null;
+          const value = firstKey ? Number(row[firstKey]) : null;
+
+          conn.subject.next({
+            metricId: metric.id,
+            value,
+            timestamp: new Date().toISOString(),
+          });
+        });
+      };
+
+      poll();
+      const timer = setInterval(poll, intervalMs);
+      conn.metricPollers.set(metric.id, { timer, subscribers: 1 });
     }
   }
 
-  private stopPoller(instanceId: string) {
-    const poller = this.pollers.get(instanceId);
-    if (!poller) return;
+  private removeConnectionSubscriber(instanceId: string) {
+    const conn = this.connections.get(instanceId);
+    if (!conn) return;
 
-    if (poller.timer) clearInterval(poller.timer);
-    if (poller.client) {
-      try { poller.client.end(); } catch { /* ignore */ }
+    conn.subscribers--;
+
+    // Decrement metric poller subscribers
+    for (const [metricId, poller] of conn.metricPollers) {
+      poller.subscribers--;
+      if (poller.subscribers <= 0) {
+        clearInterval(poller.timer);
+        conn.metricPollers.delete(metricId);
+      }
     }
-    poller.subject.complete();
-    this.pollers.delete(instanceId);
+
+    if (conn.subscribers <= 0) {
+      this.teardownConnection(instanceId);
+    }
+  }
+
+  private teardownConnection(instanceId: string) {
+    const conn = this.connections.get(instanceId);
+    if (!conn) return;
+
+    for (const [, poller] of conn.metricPollers) {
+      clearInterval(poller.timer);
+    }
+    try { conn.client.end(); } catch { /* ignore */ }
+    conn.subject.complete();
+    this.connections.delete(instanceId);
   }
 }
