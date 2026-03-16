@@ -151,10 +151,12 @@ export class SchedulerRunnerService implements OnModuleInit, OnModuleDestroy {
         return;
       }
 
-      const row = rows?.[0];
-      if (!row) return;
+      if (!rows || rows.length === 0) return;
 
-      const value = JSON.parse(JSON.stringify(row));
+      // Single row → store as object; multiple rows → store as array
+      const value = rows.length === 1
+        ? JSON.parse(JSON.stringify(rows[0]))
+        : JSON.parse(JSON.stringify(rows));
 
       this.prisma.metricSnapshot
         .create({
