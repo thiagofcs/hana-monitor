@@ -126,7 +126,9 @@ export class MetricsService implements OnModuleDestroy {
     const conn = this.connections.get(instanceId);
     if (!conn) return;
 
-    const metrics = await this.prisma.metric.findMany();
+    const metrics = await this.prisma.metric.findMany({
+      where: { showOnDashboard: true },
+    });
 
     for (const metric of metrics) {
       if (conn.metricPollers.has(metric.id)) {

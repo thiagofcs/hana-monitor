@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsInt, IsOptional, Min, Max } from 'class-validator';
+import { IsString, IsNotEmpty, IsInt, IsBoolean, IsOptional, Min, Max } from 'class-validator';
 
 export class UpdateMetricDto {
   @IsString()
@@ -36,4 +36,8 @@ export class UpdateMetricDto {
   @Max(8)
   @IsOptional()
   defaultH?: number;
+
+  @IsBoolean()
+  @IsOptional()
+  showOnDashboard?: boolean;
 }

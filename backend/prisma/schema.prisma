@@ -33,6 +33,7 @@ model Metric {
   color           String   @default("blue")
   defaultW        Int      @default(4) @map("default_w")
   defaultH        Int      @default(3) @map("default_h")
+  showOnDashboard Boolean  @default(true) @map("show_on_dashboard")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
 

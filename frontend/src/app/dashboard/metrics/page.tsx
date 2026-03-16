@@ -24,6 +24,7 @@ interface Metric {
   color: string;
   defaultW: number;
   defaultH: number;
+  showOnDashboard: boolean;
 }
 
 interface MetricForm {
@@ -34,6 +35,7 @@ interface MetricForm {
   color: string;
   defaultW: string;
   defaultH: string;
+  showOnDashboard: boolean;
 }
 
 const emptyForm: MetricForm = {
@@ -44,6 +46,7 @@ const emptyForm: MetricForm = {
   color: "blue",
   defaultW: "4",
   defaultH: "3",
+  showOnDashboard: true,
 };
 
 export default function MetricsPage() {
@@ -93,6 +96,7 @@ export default function MetricsPage() {
       color: metric.color,
       defaultW: String(metric.defaultW),
       defaultH: String(metric.defaultH),
+      showOnDashboard: metric.showOnDashboard,
     });
     setEditingId(metric.id);
     setError("");
@@ -111,6 +115,7 @@ export default function MetricsPage() {
       color: form.color,
       defaultW: parseInt(form.defaultW),
       defaultH: parseInt(form.defaultH),
+      showOnDashboard: form.showOnDashboard,
     };
 
     try {
@@ -210,7 +215,7 @@ export default function MetricsPage() {
                   required
                 />
                 <p className="text-gray-500 text-xs mt-1">
-                  Query must return a single row with one numeric column.
+                  Live dashboard metrics must return a single row with one numeric column. Schedule-only metrics can return multiple columns.
                 </p>
               </div>
 
@@ -296,6 +301,21 @@ export default function MetricsPage() {
                 </div>
               </div>
 
+              <label className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.showOnDashboard}
+                  onChange={(e) =>
+                    setForm({ ...form, showOnDashboard: e.target.checked })
+                  }
+                  className="rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500"
+                />
+                Show on Live Dashboard
+                <span className="text-gray-500 text-xs">
+                  (disable for schedule-only metrics)
+                </span>
+              </label>
+
               {error && <div className="text-red-400 text-sm">{error}</div>}
 
               <div className="flex justify-end gap-3 pt-2">
@@ -338,6 +358,7 @@ export default function MetricsPage() {
                 <th className="px-6 py-3 font-medium">Unit</th>
                 <th className="px-6 py-3 font-medium">Interval</th>
                 <th className="px-6 py-3 font-medium">Size</th>
+                <th className="px-6 py-3 font-medium">Dashboard</th>
                 <th className="px-6 py-3 font-medium text-right">Actions</th>
               </tr>
             </thead>
@@ -361,6 +382,17 @@ export default function MetricsPage() {
                   <td className="px-6 py-4 text-gray-300">{m.refreshInterval}s</td>
                   <td className="px-6 py-4 text-gray-300">
                     {m.defaultW}x{m.defaultH}
+                  </td>
+                  <td className="px-6 py-4">
+                    <span
+                      className={`text-xs px-2.5 py-1 rounded-full font-medium ${
+                        m.showOnDashboard
+                          ? "bg-green-900/30 text-green-400"
+                          : "bg-gray-800 text-gray-500"
+                      }`}
+                    >
+                      {m.showOnDashboard ? "Live" : "Schedule only"}
+                    </span>
                   </td>
                   <td className="px-6 py-4 text-right whitespace-nowrap">
                     <button
